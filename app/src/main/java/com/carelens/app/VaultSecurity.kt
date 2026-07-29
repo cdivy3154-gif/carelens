@@ -5,6 +5,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import java.io.File
 import java.security.KeyStore
 import java.security.SecureRandom
 import javax.crypto.Cipher
@@ -17,16 +18,19 @@ import javax.crypto.spec.SecretKeySpec
 
 internal enum class LockMethod { PIN, PASSWORD }
 
-internal class VaultSession internal constructor(internal val key: SecretKeySpec) {
+internal class VaultSession internal constructor(rawKey: ByteArray) {
+    private val rawKey = rawKey.copyOf()
+    internal val key: SecretKey get() = SecretKeySpec(rawKey, "AES")
+
     fun encrypt(plain: ByteArray): EncryptedPayload = encryptWith(key, plain)
     fun decrypt(payload: EncryptedPayload): ByteArray = decryptWith(key, payload)
-    fun clear() = key.encoded.fill(0)
+    fun clear() = rawKey.fill(0)
 }
 
 internal data class EncryptedPayload(val iv: ByteArray, val ciphertext: ByteArray)
 
 /** Local-only key hierarchy. No user secret or recovery phrase is stored. */
-internal class VaultStore(context: Context) {
+internal class VaultStore(private val context: Context) {
     private val preferences = context.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
 
     fun hasVault(): Boolean = preferences.contains(APP_WRAPPED_KEY)
@@ -35,18 +39,18 @@ internal class VaultStore(context: Context) {
         require(VaultSecretPolicy.isValidPinOrPassword(appSecret))
         require(VaultSecretPolicy.isValidRecoveryPhrase(recoveryPhrase))
         val rawKey = randomBytes(VAULT_KEY_BYTES)
-        val session = VaultSession(SecretKeySpec(rawKey, "AES"))
+        val session = VaultSession(rawKey)
         rawKey.fill(0)
         storeWrapped(APP, appSecret, session.key.encoded)
-        storeWrapped(RECOVERY, recoveryPhrase, session.key.encoded)
+        storeWrapped(RECOVERY, recoveryPhrase.trim().lowercase(), session.key.encoded)
         return session
     }
 
     fun unlock(appSecret: String): VaultSession? = unwrap(APP, appSecret)
 
     fun recover(recoveryPhrase: String, newAppSecret: String): VaultSession? {
-        if (!VaultSecretPolicy.isValid(newAppSecret)) return null
-        val session = unwrap(RECOVERY, recoveryPhrase) ?: return null
+        if (!VaultSecretPolicy.isValidPinOrPassword(newAppSecret)) return null
+        val session = unwrap(RECOVERY, recoveryPhrase.trim().lowercase()) ?: return null
         storeWrapped(APP, newAppSecret, session.key.encoded)
         return session
     }
@@ -87,13 +91,19 @@ internal class VaultStore(context: Context) {
 
     fun completeBiometricUnlock(cipher: Cipher): VaultSession? = runCatching {
         val encrypted = decode(preferences.getString(BIOMETRIC_WRAPPED_KEY, null) ?: return null)
-        VaultSession(SecretKeySpec(cipher.doFinal(encrypted), "AES"))
+        val raw = cipher.doFinal(encrypted)
+        VaultSession(raw).also { raw.fill(0) }
     }.getOrNull()
 
     fun biometricIsEnabled(): Boolean = preferences.contains(BIOMETRIC_WRAPPED_KEY)
 
     fun wipeVault() {
+        runCatching { keyStore().deleteEntry(BIOMETRIC_KEY_ALIAS) }
         preferences.edit().clear().commit()
+        // Vault contents are encrypted with a key that has just been destroyed. Removing the
+        // ciphertext afterwards keeps the app-private storage tidy without relying on insecure
+        // flash "secure deletion" claims.
+        File(context.filesDir, "carelens_vault").deleteRecursively()
     }
 
     private fun storeWrapped(slot: String, secret: String, rawKey: ByteArray) {
@@ -116,7 +126,7 @@ internal class VaultStore(context: Context) {
         val derived = deriveKey(secret.toCharArray(), salt)
         val raw = decryptWith(derived, EncryptedPayload(iv, cipherText))
         derived.encoded.fill(0)
-        VaultSession(SecretKeySpec(raw, "AES"))
+        VaultSession(raw).also { raw.fill(0) }
     }.getOrNull()
 
     private fun deriveKey(secret: CharArray, salt: ByteArray): SecretKeySpec {
@@ -171,7 +181,10 @@ internal object VaultSecretPolicy {
 
     fun generateRecoveryPhrase(): String = List(12) { recoveryWords[randomIndex()] }.joinToString(" ")
 
-    fun isValidRecoveryPhrase(phrase: String): Boolean = phrase.trim().split(Regex("\\s+")).size == 12
+    fun isValidRecoveryPhrase(phrase: String): Boolean =
+        phrase.trim().lowercase().split(Regex("\\s+")).let { words ->
+            words.size == 12 && words.all(recoveryWords::contains)
+        }
 }
 
 private val secureRandom = SecureRandom()

@@ -1,11 +1,11 @@
 package com.carelens.app
 
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,13 +25,17 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,383 +47,314 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 class MainActivity : ComponentActivity() {
+    private var lockSignal = mutableIntStateOf(0)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         enableEdgeToEdge()
-        setContent { CareLensApp() }
+        setContent { CareLensApp(lockSignal.intValue) }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // A vault never remains open while the app is not visible. Configuration changes do not
+        // count as leaving the app and therefore retain the in-memory session.
+        if (!isChangingConfigurations) lockSignal.intValue++
     }
 }
 
 private enum class AppLanguage { ENGLISH, HINDI }
-
-internal enum class LockMethod { PIN, PASSWORD }
-
-private enum class OnboardingStep { LANGUAGE, VAULT, HOME }
-
-private data class Copy(
-    val welcome: String,
-    val welcomeDetail: String,
-    val chooseLanguage: String,
-    val languageDetail: String,
-    val continueLabel: String,
-    val privacyPromise: String,
-    val createVault: String,
-    val vaultDetail: String,
-    val appPin: String,
-    val appPassword: String,
-    val pinHint: String,
-    val passwordHint: String,
-    val confirmSecret: String,
-    val secretsDoNotMatch: String,
-    val minimumPin: String,
-    val createVaultButton: String,
-    val biometricNote: String,
-    val back: String,
-    val homeGreeting: String,
-    val homeDetail: String,
-    val addDocument: String,
-    val noDocuments: String,
-    val localOnly: String,
-    val minimumPassword: String = "",
-)
-
-private fun copyFor(language: AppLanguage): Copy = when (language) {
-    AppLanguage.ENGLISH -> Copy(
-        welcome = "Welcome to CareLens",
-        welcomeDetail = "Your private medical record assistant, designed to work on your phone.",
-        chooseLanguage = "Choose your language",
-        languageDetail = "You can change this later in Settings. CareLens explanations will use your selected language.",
-        continueLabel = "Continue",
-        privacyPromise = "Local-only by design. No Internet permission. No cloud account.",
-        createVault = "Create your private vault",
-        vaultDetail = "Choose a lock for your medical records. If you forget it, CareLens cannot recover your vault.",
-        appPin = "App PIN",
-        appPassword = "App password",
-        pinHint = "At least 6 digits",
-        passwordHint = "Use a strong password",
-        confirmSecret = "Confirm",
-        secretsDoNotMatch = "The two entries do not match.",
-        minimumPin = "Your PIN must contain at least 6 digits.",
-        minimumPassword = "Your password must contain at least 10 characters.",
-        createVaultButton = "Create secure vault",
-        biometricNote = "Fingerprint and secure face unlock are planned for a later security milestone. This first version uses your app PIN or password.",
-        back = "Back",
-        homeGreeting = "Your private health space",
-        homeDetail = "Add a report or photo to start building your personal medical timeline.",
-        addDocument = "Add medical document",
-        noDocuments = "No documents yet",
-        localOnly = "CareLens is designed for local processing only.",
-    )
-    AppLanguage.HINDI -> Copy(
-        welcome = "CareLens में आपका स्वागत है",
-        welcomeDetail = "आपका निजी मेडिकल रिकॉर्ड सहायक, जो आपके फ़ोन पर काम करने के लिए बनाया गया है।",
-        chooseLanguage = "अपनी भाषा चुनें",
-        languageDetail = "आप इसे बाद में सेटिंग्स में बदल सकते हैं। CareLens की व्याख्याएँ चुनी हुई भाषा में होंगी।",
-        continueLabel = "आगे बढ़ें",
-        privacyPromise = "डिज़ाइन से केवल फ़ोन पर। इंटरनेट अनुमति नहीं। कोई क्लाउड खाता नहीं।",
-        createVault = "अपना निजी वॉल्ट बनाएँ",
-        vaultDetail = "अपने मेडिकल रिकॉर्ड के लिए लॉक चुनें। यदि आप इसे भूल जाते हैं, तो CareLens आपका वॉल्ट वापस नहीं ला सकता।",
-        appPin = "ऐप पिन",
-        appPassword = "ऐप पासवर्ड",
-        pinHint = "कम-से-कम 6 अंक",
-        passwordHint = "एक मजबूत पासवर्ड इस्तेमाल करें",
-        confirmSecret = "पुष्टि करें",
-        secretsDoNotMatch = "दोनों प्रविष्टियाँ एक जैसी नहीं हैं।",
-        minimumPin = "आपके पिन में कम-से-कम 6 अंक होने चाहिए।",
-        createVaultButton = "सुरक्षित वॉल्ट बनाएँ",
-        biometricNote = "वॉल्ट बनने के बाद, यदि आपका फ़ोन समर्थन करता है, तो फिंगरप्रिंट या सुरक्षित फेस अनलॉक चालू किया जा सकेगा।",
-        back = "वापस",
-        homeGreeting = "आपकी निजी स्वास्थ्य जगह",
-        homeDetail = "अपनी निजी मेडिकल टाइमलाइन बनाना शुरू करने के लिए कोई रिपोर्ट या फोटो जोड़ें।",
-        addDocument = "मेडिकल दस्तावेज़ जोड़ें",
-        noDocuments = "अभी कोई दस्तावेज़ नहीं है",
-        localOnly = "CareLens केवल फ़ोन पर प्रोसेसिंग के लिए बनाया गया है।",
-    )
-}
+private enum class Screen { LANGUAGE, CREATE, PHRASE, LOCKED, RECOVER, ERASE, HOME }
 
 @Composable
-private fun CareLensApp() {
+private fun CareLensApp(lockSignal: Int) {
+    val context = LocalContext.current.applicationContext
+    val vaultStore = remember { VaultStore(context) }
     var language by remember { mutableStateOf(AppLanguage.ENGLISH) }
-    var step by remember { mutableStateOf(OnboardingStep.LANGUAGE) }
-    val vaultStore = remember { VaultStore(LocalContext.current.applicationContext) }
-    val copy = copyFor(language)
+    var screen by remember { mutableStateOf(if (vaultStore.hasVault()) Screen.LOCKED else Screen.LANGUAGE) }
+    var session by remember { mutableStateOf<VaultSession?>(null) }
+    var pendingSecret by remember { mutableStateOf("") }
+    var recoveryPhrase by remember { mutableStateOf("") }
+
+    LaunchedEffect(lockSignal) {
+        if (lockSignal > 0 && session != null) {
+            session?.clear()
+            session = null
+            screen = Screen.LOCKED
+        }
+    }
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = CareLensBackground) {
-            when (step) {
-                OnboardingStep.LANGUAGE -> LanguageScreen(
+            when (screen) {
+                Screen.LANGUAGE -> LanguageScreen(
                     language = language,
-                    copy = copy,
                     onLanguageSelected = { language = it },
-                    onContinue = { step = OnboardingStep.VAULT },
+                    onContinue = { screen = Screen.CREATE },
                 )
-                OnboardingStep.VAULT -> VaultScreen(
-                    copy = copy,
-                    onBack = { step = OnboardingStep.LANGUAGE },
-                    onVaultCreated = { secret ->
-                        vaultStore.createVault(secret)
-                        step = OnboardingStep.HOME
+                Screen.CREATE -> CreateVaultScreen(
+                    language = language,
+                    onBack = { screen = Screen.LANGUAGE },
+                    onSecretAccepted = { secret ->
+                        pendingSecret = secret
+                        recoveryPhrase = VaultSecretPolicy.generateRecoveryPhrase()
+                        screen = Screen.PHRASE
                     },
                 )
-                OnboardingStep.HOME -> HomeScreen(copy = copy)
+                Screen.PHRASE -> RecoveryPhraseScreen(
+                    language = language,
+                    phrase = recoveryPhrase,
+                    onBack = {
+                        pendingSecret = ""
+                        recoveryPhrase = ""
+                        screen = Screen.CREATE
+                    },
+                    onConfirmed = {
+                        session = vaultStore.createVault(pendingSecret, recoveryPhrase)
+                        pendingSecret = ""
+                        recoveryPhrase = ""
+                        screen = Screen.HOME
+                    },
+                )
+                Screen.LOCKED -> UnlockScreen(
+                    language = language,
+                    onUnlock = { secret ->
+                        vaultStore.unlock(secret)?.let {
+                            session = it
+                            screen = Screen.HOME
+                            true
+                        } ?: false
+                    },
+                    onRecover = { screen = Screen.RECOVER },
+                    onErase = { screen = Screen.ERASE },
+                )
+                Screen.RECOVER -> RecoverVaultScreen(
+                    language = language,
+                    onBack = { screen = Screen.LOCKED },
+                    onRecover = { phrase, newSecret ->
+                        vaultStore.recover(phrase, newSecret)?.let {
+                            session = it
+                            screen = Screen.HOME
+                            true
+                        } ?: false
+                    },
+                )
+                Screen.ERASE -> EraseVaultScreen(
+                    language = language,
+                    onCancel = { screen = Screen.LOCKED },
+                    onErase = {
+                        session?.clear()
+                        session = null
+                        vaultStore.wipeVault()
+                        screen = Screen.LANGUAGE
+                    },
+                )
+                Screen.HOME -> HomeScreen(
+                    language = language,
+                    onLock = {
+                        session?.clear()
+                        session = null
+                        screen = Screen.LOCKED
+                    },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun LanguageScreen(
-    language: AppLanguage,
-    copy: Copy,
-    onLanguageSelected: (AppLanguage) -> Unit,
-    onContinue: () -> Unit,
-) {
-    AppPage {
+private fun LanguageScreen(language: AppLanguage, onLanguageSelected: (AppLanguage) -> Unit, onContinue: () -> Unit) {
+    Page {
         BrandMark()
-        Spacer(Modifier.height(40.dp))
-        Text(copy.welcome, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(44.dp))
+        Heading(t(language, "Welcome to CareLens", "CareLens में आपका स्वागत है"))
+        Body(t(language, "Your medical information stays on this phone.", "आपकी चिकित्सा जानकारी इसी फ़ोन पर रहती है।"))
+        Spacer(Modifier.height(34.dp))
+        Text(t(language, "Choose language", "भाषा चुनें"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(14.dp))
+        ChoiceButton("English", language == AppLanguage.ENGLISH) { onLanguageSelected(AppLanguage.ENGLISH) }
         Spacer(Modifier.height(12.dp))
-        Text(copy.welcomeDetail, style = MaterialTheme.typography.bodyLarge, color = CareLensMuted)
-        Spacer(Modifier.height(40.dp))
-        Text(copy.chooseLanguage, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
-        Text(copy.languageDetail, color = CareLensMuted)
-        Spacer(Modifier.height(24.dp))
-        LanguageChoice("English", "English", language == AppLanguage.ENGLISH) {
-            onLanguageSelected(AppLanguage.ENGLISH)
-        }
-        Spacer(Modifier.height(12.dp))
-        LanguageChoice("हिन्दी", "Hindi", language == AppLanguage.HINDI) {
-            onLanguageSelected(AppLanguage.HINDI)
-        }
+        ChoiceButton("हिन्दी", language == AppLanguage.HINDI) { onLanguageSelected(AppLanguage.HINDI) }
         Spacer(Modifier.weight(1f))
-        PrivacyCard(copy.privacyPromise)
+        PrivacyCard(t(language, "Local-only. No Internet permission. No cloud account.", "केवल फ़ोन पर। इंटरनेट अनुमति नहीं। कोई क्लाउड खाता नहीं।"))
         Spacer(Modifier.height(18.dp))
-        PrimaryButton(copy.continueLabel, onContinue)
+        PrimaryButton(t(language, "Continue", "आगे बढ़ें"), onContinue)
     }
 }
 
 @Composable
-private fun VaultScreen(copy: Copy, onBack: () -> Unit, onVaultCreated: (String) -> Unit) {
+private fun CreateVaultScreen(language: AppLanguage, onBack: () -> Unit, onSecretAccepted: (String) -> Unit) {
     var method by remember { mutableStateOf(LockMethod.PIN) }
     var secret by remember { mutableStateOf("") }
-    var confirmation by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    val hint = if (method == LockMethod.PIN) copy.pinHint else copy.passwordHint
+    val isPin = method == LockMethod.PIN
+    val hint = if (isPin) t(language, "At least 6 digits", "कम-से-कम 6 अंक") else t(language, "At least 10 characters", "कम-से-कम 10 अक्षर")
 
-    AppPage {
-        OutlinedButton(onClick = onBack) { Text(copy.back) }
+    Page {
+        BackButton(language, onBack)
         Spacer(Modifier.height(28.dp))
         BrandMark()
-        Spacer(Modifier.height(28.dp))
-        Text(copy.createVault, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(12.dp))
-        Text(copy.vaultDetail, style = MaterialTheme.typography.bodyLarge, color = CareLensMuted)
-        Spacer(Modifier.height(28.dp))
-        Row(modifier = Modifier.fillMaxWidth()) {
-            LockMethodButton(copy.appPin, method == LockMethod.PIN, Modifier.weight(1f)) {
-                method = LockMethod.PIN
-                secret = ""
-                confirmation = ""
-                error = null
-            }
+        Spacer(Modifier.height(26.dp))
+        Heading(t(language, "Create your secure vault", "अपना सुरक्षित वॉल्ट बनाएँ"))
+        Body(t(language, "Choose the lock used to encrypt your private records.", "अपने निजी रिकॉर्ड एन्क्रिप्ट करने के लिए लॉक चुनें।"))
+        Spacer(Modifier.height(24.dp))
+        Row(Modifier.fillMaxWidth()) {
+            ChoiceButton(t(language, "PIN", "पिन"), isPin, Modifier.weight(1f)) { method = LockMethod.PIN; secret = ""; confirm = ""; error = null }
             Spacer(Modifier.width(12.dp))
-            LockMethodButton(copy.appPassword, method == LockMethod.PASSWORD, Modifier.weight(1f)) {
-                method = LockMethod.PASSWORD
-                secret = ""
-                confirmation = ""
-                error = null
-            }
+            ChoiceButton(t(language, "Password", "पासवर्ड"), !isPin, Modifier.weight(1f)) { method = LockMethod.PASSWORD; secret = ""; confirm = ""; error = null }
         }
         Spacer(Modifier.height(20.dp))
-        SecretField(
-            value = secret,
-            label = if (method == LockMethod.PIN) copy.appPin else copy.appPassword,
-            hint = hint,
-            isPin = method == LockMethod.PIN,
-            onValueChange = { secret = it; error = null },
-        )
+        SecretField(secret, if (isPin) t(language, "App PIN", "ऐप पिन") else t(language, "App password", "ऐप पासवर्ड"), hint, isPin) { secret = it; error = null }
         Spacer(Modifier.height(12.dp))
-        SecretField(
-            value = confirmation,
-            label = copy.confirmSecret,
-            hint = hint,
-            isPin = method == LockMethod.PIN,
-            onValueChange = { confirmation = it; error = null },
-        )
-        if (error != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
-        }
+        SecretField(confirm, t(language, "Confirm lock", "लॉक की पुष्टि करें"), hint, isPin) { confirm = it; error = null }
+        error?.let { ErrorText(it) }
         Spacer(Modifier.height(20.dp))
-        PrivacyCard(copy.biometricNote)
+        PrivacyCard(t(language, "Your lock is never stored. Keep the recovery phrase shown next somewhere safe.", "आपका लॉक कभी संग्रहीत नहीं किया जाता। अगला रिकवरी वाक्यांश सुरक्षित रखें।"))
         Spacer(Modifier.weight(1f))
-        PrimaryButton(copy.createVaultButton) {
+        PrimaryButton(t(language, "Continue", "आगे बढ़ें")) {
             error = when {
-                !VaultSecretPolicy.isValid(method, secret) -> {
-                    if (method == LockMethod.PIN) copy.minimumPin else copy.minimumPassword
-                }
-                secret.isBlank() -> hint
-                secret != confirmation -> copy.secretsDoNotMatch
+                !VaultSecretPolicy.isValid(method, secret) -> hint
+                secret != confirm -> t(language, "The two entries do not match.", "दोनों प्रविष्टियाँ समान नहीं हैं।")
                 else -> null
             }
-            if (error == null) onVaultCreated(secret)
+            if (error == null) onSecretAccepted(secret)
         }
     }
 }
 
 @Composable
-private fun HomeScreen(copy: Copy) {
-    AppPage {
+private fun RecoveryPhraseScreen(language: AppLanguage, phrase: String, onBack: () -> Unit, onConfirmed: () -> Unit) {
+    var saved by remember { mutableStateOf(false) }
+    Page {
+        BackButton(language, onBack)
+        Spacer(Modifier.height(28.dp))
+        Heading(t(language, "Save your recovery phrase", "अपना रिकवरी वाक्यांश सहेजें"))
+        Body(t(language, "Write these 12 words down in order. They are the only way to reset a forgotten app lock. CareLens cannot show them again.", "इन 12 शब्दों को क्रम से लिख लें। भूले हुए ऐप लॉक को रीसेट करने का यही एकमात्र तरीका है। CareLens इन्हें फिर नहीं दिखा सकता।"))
+        Spacer(Modifier.height(20.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(18.dp)) {
+            Text(phrase, modifier = Modifier.padding(20.dp), fontSize = 20.sp, lineHeight = 32.sp, fontWeight = FontWeight.SemiBold, color = CareLensInk)
+        }
+        Spacer(Modifier.height(18.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(checked = saved, onCheckedChange = { saved = it })
+            Text(t(language, "I have written down this phrase.", "मैंने यह वाक्यांश लिख लिया है।"), modifier = Modifier.padding(start = 6.dp))
+        }
+        Spacer(Modifier.weight(1f))
+        PrimaryButton(t(language, "Create secure vault", "सुरक्षित वॉल्ट बनाएँ"), enabled = saved, onClick = onConfirmed)
+    }
+}
+
+@Composable
+private fun UnlockScreen(language: AppLanguage, onUnlock: (String) -> Boolean, onRecover: () -> Unit, onErase: () -> Unit) {
+    var secret by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+    Page {
         BrandMark()
-        Spacer(Modifier.height(40.dp))
-        Text(copy.homeGreeting, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+        Spacer(Modifier.height(44.dp))
+        Heading(t(language, "Unlock your vault", "अपना वॉल्ट अनलॉक करें"))
+        Body(t(language, "Enter your app PIN or password.", "अपना ऐप पिन या पासवर्ड दर्ज करें।"))
+        Spacer(Modifier.height(24.dp))
+        SecretField(secret, t(language, "PIN or password", "पिन या पासवर्ड"), "", false) { secret = it; error = false }
+        if (error) ErrorText(t(language, "That PIN or password did not unlock this vault.", "यह पिन या पासवर्ड वॉल्ट नहीं खोल सका।"))
+        Spacer(Modifier.height(16.dp))
+        PrimaryButton(t(language, "Unlock", "अनलॉक करें")) { error = !onUnlock(secret); if (!error) secret = "" }
         Spacer(Modifier.height(12.dp))
-        Text(copy.homeDetail, style = MaterialTheme.typography.bodyLarge, color = CareLensMuted)
-        Spacer(Modifier.height(32.dp))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            shape = RoundedCornerShape(24.dp),
-        ) {
-            Column(modifier = Modifier.padding(24.dp)) {
-                Text(copy.noDocuments, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(8.dp))
-                Text(copy.localOnly, color = CareLensMuted)
-                Spacer(Modifier.height(20.dp))
-                PrimaryButton(copy.addDocument) { /* Document import is the next milestone. */ }
+        TextButton(onClick = onRecover, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(t(language, "Forgot your lock? Use recovery phrase", "लॉक भूल गए? रिकवरी वाक्यांश इस्तेमाल करें")) }
+        TextButton(onClick = onErase, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text(t(language, "Erase this vault", "यह वॉल्ट मिटाएँ"), color = MaterialTheme.colorScheme.error) }
+    }
+}
+
+@Composable
+private fun RecoverVaultScreen(language: AppLanguage, onBack: () -> Unit, onRecover: (String, String) -> Boolean) {
+    var phrase by remember { mutableStateOf("") }
+    var newSecret by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    Page {
+        BackButton(language, onBack)
+        Spacer(Modifier.height(28.dp))
+        Heading(t(language, "Reset forgotten lock", "भूला हुआ लॉक रीसेट करें"))
+        Body(t(language, "Enter your 12-word recovery phrase, then choose a new PIN or password.", "अपना 12-शब्द का रिकवरी वाक्यांश दर्ज करें, फिर नया पिन या पासवर्ड चुनें।"))
+        Spacer(Modifier.height(20.dp))
+        OutlinedTextField(value = phrase, onValueChange = { phrase = it; error = null }, modifier = Modifier.fillMaxWidth(), label = { Text(t(language, "Recovery phrase", "रिकवरी वाक्यांश")) }, minLines = 3, shape = RoundedCornerShape(14.dp))
+        Spacer(Modifier.height(12.dp))
+        SecretField(newSecret, t(language, "New PIN or password", "नया पिन या पासवर्ड"), t(language, "6 digits or 10 characters", "6 अंक या 10 अक्षर"), false) { newSecret = it; error = null }
+        Spacer(Modifier.height(12.dp))
+        SecretField(confirm, t(language, "Confirm new lock", "नए लॉक की पुष्टि करें"), "", false) { confirm = it; error = null }
+        error?.let { ErrorText(it) }
+        Spacer(Modifier.weight(1f))
+        PrimaryButton(t(language, "Reset and unlock", "रीसेट और अनलॉक करें")) {
+            error = when {
+                !VaultSecretPolicy.isValidRecoveryPhrase(phrase) -> t(language, "Enter the 12-word recovery phrase exactly as saved.", "12-शब्द का रिकवरी वाक्यांश ठीक वैसे ही दर्ज करें जैसे सहेजा था।")
+                !VaultSecretPolicy.isValidPinOrPassword(newSecret) -> t(language, "Use at least 6 PIN digits or a 10-character password.", "कम-से-कम 6 पिन अंक या 10-अक्षर का पासवर्ड इस्तेमाल करें।")
+                newSecret != confirm -> t(language, "The two entries do not match.", "दोनों प्रविष्टियाँ समान नहीं हैं।")
+                !onRecover(phrase, newSecret) -> t(language, "This recovery phrase did not unlock the vault.", "यह रिकवरी वाक्यांश वॉल्ट नहीं खोल सका।")
+                else -> null
             }
         }
     }
 }
 
 @Composable
-private fun AppPage(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 32.dp),
-        verticalArrangement = Arrangement.Top,
-        content = content,
-    )
-}
-
-@Composable
-private fun BrandMark() {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            modifier = Modifier
-                .background(CareLensTeal, RoundedCornerShape(14.dp))
-                .padding(12.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("C", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.width(10.dp))
-        Text("CareLens", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = CareLensInk)
+private fun EraseVaultScreen(language: AppLanguage, onCancel: () -> Unit, onErase: () -> Unit) {
+    Page {
+        Heading(t(language, "Erase this vault?", "यह वॉल्ट मिटाएँ?"))
+        Spacer(Modifier.height(12.dp))
+        Body(t(language, "This permanently removes the encrypted vault and all documents stored in it from this device. It cannot be undone.", "यह इस डिवाइस से एन्क्रिप्टेड वॉल्ट और उसमें रखे सभी दस्तावेज़ स्थायी रूप से हटा देगा। इसे वापस नहीं किया जा सकता।"))
+        Spacer(Modifier.height(28.dp))
+        PrimaryButton(t(language, "Permanently erase vault", "वॉल्ट स्थायी रूप से मिटाएँ"), destructive = true, onClick = onErase)
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text(t(language, "Cancel", "रद्द करें")) }
     }
 }
 
 @Composable
-private fun LanguageChoice(title: String, subtitle: String, selected: Boolean, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(76.dp),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) CareLensTealSoft else Color.White,
-            contentColor = CareLensInk,
-        ),
-        border = BorderStroke(if (selected) 2.dp else 1.dp, if (selected) CareLensTeal else CareLensBorder),
-        shape = RoundedCornerShape(18.dp),
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(title, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
-            Text(subtitle, color = CareLensMuted, fontSize = 13.sp)
-        }
+private fun HomeScreen(language: AppLanguage, onLock: () -> Unit) {
+    Page {
+        BrandMark()
+        Spacer(Modifier.height(44.dp))
+        Heading(t(language, "Your vault is unlocked", "आपका वॉल्ट अनलॉक है"))
+        Body(t(language, "CareLens locks automatically whenever it leaves the screen. Document import and offline reading are being prepared inside this encrypted vault.", "CareLens स्क्रीन से हटते ही अपने-आप लॉक हो जाता है। एन्क्रिप्टेड वॉल्ट में दस्तावेज़ आयात और ऑफ़लाइन पढ़ने की तैयारी हो रही है।"))
+        Spacer(Modifier.height(28.dp))
+        PrivacyCard(t(language, "Your vault key exists only in memory while this screen is open.", "इस स्क्रीन के खुले रहने तक ही आपकी वॉल्ट कुंजी मेमोरी में रहती है।"))
+        Spacer(Modifier.height(24.dp))
+        PrimaryButton(t(language, "Lock now", "अभी लॉक करें"), onClick = onLock)
     }
 }
 
+@Composable private fun Page(content: @Composable ColumnScope.() -> Unit) = Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 32.dp), verticalArrangement = Arrangement.Top, content = content)
+@Composable private fun Heading(text: String) = Text(text, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = CareLensInk)
+@Composable private fun Body(text: String) { Spacer(Modifier.height(12.dp)); Text(text, style = MaterialTheme.typography.bodyLarge, color = CareLensMuted) }
+@Composable private fun BackButton(language: AppLanguage, onClick: () -> Unit) = OutlinedButton(onClick = onClick) { Text(t(language, "Back", "वापस")) }
+@Composable private fun ErrorText(text: String) { Spacer(Modifier.height(8.dp)); Text(text, color = MaterialTheme.colorScheme.error) }
+
 @Composable
-private fun LockMethodButton(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier.height(52.dp),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) CareLensTealSoft else Color.White,
-            contentColor = CareLensInk,
-        ),
-        border = BorderStroke(1.dp, if (selected) CareLensTeal else CareLensBorder),
-        shape = RoundedCornerShape(14.dp),
-    ) { Text(label, textAlign = TextAlign.Center) }
+private fun BrandMark() = Row(verticalAlignment = Alignment.CenterVertically) {
+    Box(Modifier.background(CareLensTeal, RoundedCornerShape(14.dp)).padding(12.dp), contentAlignment = Alignment.Center) { Text("C", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+    Spacer(Modifier.width(10.dp)); Text("CareLens", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = CareLensInk)
 }
 
 @Composable
-private fun SecretField(
-    value: String,
-    label: String,
-    hint: String,
-    isPin: Boolean,
-    onValueChange: (String) -> Unit,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { input -> onValueChange(if (isPin) input.filter(Char::isDigit) else input) },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text(label) },
-        placeholder = { Text(hint) },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(
-            keyboardType = if (isPin) KeyboardType.NumberPassword else KeyboardType.Password,
-            imeAction = ImeAction.Done,
-        ),
-        shape = RoundedCornerShape(14.dp),
-    )
-}
+private fun ChoiceButton(label: String, selected: Boolean, modifier: Modifier = Modifier.fillMaxWidth(), onClick: () -> Unit) = OutlinedButton(onClick = onClick, modifier = modifier.height(54.dp), colors = ButtonDefaults.outlinedButtonColors(containerColor = if (selected) CareLensTealSoft else Color.White, contentColor = CareLensInk), shape = RoundedCornerShape(14.dp)) { Text(label) }
 
 @Composable
-private fun PrivacyCard(text: String) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = CareLensTealSoft),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier.padding(16.dp),
-            color = CareLensInk,
-            style = MaterialTheme.typography.bodyMedium,
-        )
-    }
-}
+private fun SecretField(value: String, label: String, hint: String, isPin: Boolean, onValueChange: (String) -> Unit) = OutlinedTextField(value = value, onValueChange = { input -> onValueChange(if (isPin) input.filter(Char::isDigit) else input) }, modifier = Modifier.fillMaxWidth(), label = { Text(label) }, placeholder = { Text(hint) }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = if (isPin) KeyboardType.NumberPassword else KeyboardType.Password, imeAction = ImeAction.Done), shape = RoundedCornerShape(14.dp))
 
 @Composable
-private fun PrimaryButton(label: String, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().height(54.dp),
-        colors = ButtonDefaults.buttonColors(containerColor = CareLensTeal),
-        shape = RoundedCornerShape(16.dp),
-    ) {
-        Text(label, fontWeight = FontWeight.SemiBold)
-    }
-}
+private fun PrivacyCard(text: String) = Card(colors = CardDefaults.cardColors(containerColor = CareLensTealSoft), shape = RoundedCornerShape(16.dp)) { Text(text, Modifier.padding(16.dp), color = CareLensInk) }
 
+@Composable
+private fun PrimaryButton(label: String, enabled: Boolean = true, destructive: Boolean = false, onClick: () -> Unit) = Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().height(54.dp), colors = ButtonDefaults.buttonColors(containerColor = if (destructive) MaterialTheme.colorScheme.error else CareLensTeal), shape = RoundedCornerShape(16.dp)) { Text(label, fontWeight = FontWeight.SemiBold) }
+
+private fun t(language: AppLanguage, english: String, hindi: String) = if (language == AppLanguage.HINDI) hindi else english
 private val CareLensTeal = Color(0xFF126A63)
 private val CareLensTealSoft = Color(0xFFE0F3F0)
 private val CareLensInk = Color(0xFF182926)
 private val CareLensMuted = Color(0xFF58716C)
-private val CareLensBorder = Color(0xFFC6D7D3)
 private val CareLensBackground = Color(0xFFF6F9F8)
-
-@Preview(showBackground = true, backgroundColor = 0xFFF6F9F8)
-@Composable
-private fun CareLensPreview() {
-    CareLensApp()
-}
