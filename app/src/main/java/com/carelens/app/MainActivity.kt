@@ -1,9 +1,14 @@
 package com.carelens.app
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +54,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private var lockSignal = mutableIntStateOf(0)
@@ -71,15 +80,79 @@ class MainActivity : ComponentActivity() {
 private enum class AppLanguage { ENGLISH, HINDI }
 private enum class Screen { LANGUAGE, CREATE, PHRASE, LOCKED, RECOVER, ERASE, HOME }
 
+private data class PendingImport(
+    val uri: Uri,
+    val displayName: String? = null,
+    val mimeType: String? = null,
+    val temporaryCameraFile: File? = null,
+    val persistedReadGrant: Boolean = false,
+)
+
+/** The selected language is device-local metadata and is available before vault unlock. */
+private class LanguageStore(context: Context) {
+    private val preferences = context.getSharedPreferences("carelens_settings", Context.MODE_PRIVATE)
+
+    fun load(): AppLanguage = when (preferences.getString("language", null)) {
+        AppLanguage.HINDI.name -> AppLanguage.HINDI
+        else -> AppLanguage.ENGLISH
+    }
+
+    fun save(language: AppLanguage) {
+        preferences.edit().putString("language", language.name).apply()
+    }
+}
+
 @Composable
 private fun CareLensApp(lockSignal: Int) {
     val context = LocalContext.current.applicationContext
     val vaultStore = remember { VaultStore(context) }
-    var language by remember { mutableStateOf(AppLanguage.ENGLISH) }
+    val documentRepository = remember { DocumentRepository(context) }
+    val languageStore = remember { LanguageStore(context) }
+    var language by remember { mutableStateOf(languageStore.load()) }
     var screen by remember { mutableStateOf(if (vaultStore.hasVault()) Screen.LOCKED else Screen.LANGUAGE) }
     var session by remember { mutableStateOf<VaultSession?>(null) }
     var pendingSecret by remember { mutableStateOf("") }
     var recoveryPhrase by remember { mutableStateOf("") }
+    var documents by remember { mutableStateOf<List<MedicalDocument>>(emptyList()) }
+    var pendingImport by remember { mutableStateOf<PendingImport?>(null) }
+    var pendingCameraFile by remember { mutableStateOf<File?>(null) }
+    var importing by remember { mutableStateOf(false) }
+    var importFailed by remember { mutableStateOf(false) }
+    val updateLanguage: (AppLanguage) -> Unit = { selected ->
+        language = selected
+        languageStore.save(selected)
+    }
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(it, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            pendingImport = PendingImport(uri = it, persistedReadGrant = true)
+        }
+    }
+    val cameraCapture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        val file = pendingCameraFile
+        pendingCameraFile = null
+        if (saved && file != null) {
+            pendingImport = PendingImport(
+                uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file),
+                displayName = "Camera scan ${System.currentTimeMillis()}.jpg",
+                mimeType = "image/jpeg",
+                temporaryCameraFile = file,
+            )
+        } else {
+            file?.delete()
+        }
+    }
+    val startCameraCapture: () -> Unit = {
+        runCatching {
+            val directory = File(context.cacheDir, "camera").apply { mkdirs() }
+            File.createTempFile("carelens_scan_", ".jpg", directory)
+        }.onSuccess { file ->
+            pendingCameraFile = file
+            cameraCapture.launch(FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file))
+        }.onFailure { importFailed = true }
+    }
 
     LaunchedEffect(lockSignal) {
         if (lockSignal > 0 && session != null) {
@@ -89,12 +162,47 @@ private fun CareLensApp(lockSignal: Int) {
         }
     }
 
+    LaunchedEffect(session, pendingImport) {
+        val activeSession = session ?: run {
+            documents = emptyList()
+            return@LaunchedEffect
+        }
+        val import = pendingImport
+        if (import == null) {
+            documents = withContext(Dispatchers.IO) { documentRepository.load(activeSession) }
+            return@LaunchedEffect
+        }
+        importing = true
+        importFailed = false
+        val result = runCatching {
+            withContext(Dispatchers.IO) {
+                documentRepository.importFromUri(
+                    context.contentResolver,
+                    import.uri,
+                    activeSession,
+                    import.displayName,
+                    import.mimeType,
+                )
+                documentRepository.load(activeSession)
+            }
+        }
+        result.onSuccess { documents = it }.onFailure { importFailed = true }
+        import.temporaryCameraFile?.delete()
+        if (import.persistedReadGrant) {
+            runCatching {
+                context.contentResolver.releasePersistableUriPermission(import.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+        }
+        pendingImport = null
+        importing = false
+    }
+
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize(), color = CareLensBackground) {
             when (screen) {
                 Screen.LANGUAGE -> LanguageScreen(
                     language = language,
-                    onLanguageSelected = { language = it },
+                    onLanguageSelected = updateLanguage,
                     onContinue = { screen = Screen.CREATE },
                 )
                 Screen.CREATE -> CreateVaultScreen(
@@ -156,6 +264,12 @@ private fun CareLensApp(lockSignal: Int) {
                 )
                 Screen.HOME -> HomeScreen(
                     language = language,
+                    onLanguageSelected = updateLanguage,
+                    documents = documents,
+                    importing = importing,
+                    importFailed = importFailed,
+                    onChooseDocument = { documentPicker.launch(arrayOf("image/*", "application/pdf")) },
+                    onCaptureScan = startCameraCapture,
                     onLock = {
                         session?.clear()
                         session = null
@@ -315,7 +429,16 @@ private fun EraseVaultScreen(language: AppLanguage, onCancel: () -> Unit, onEras
 }
 
 @Composable
-private fun HomeScreen(language: AppLanguage, onLock: () -> Unit) {
+private fun HomeScreen(
+    language: AppLanguage,
+    onLanguageSelected: (AppLanguage) -> Unit,
+    documents: List<MedicalDocument>,
+    importing: Boolean,
+    importFailed: Boolean,
+    onChooseDocument: () -> Unit,
+    onCaptureScan: () -> Unit,
+    onLock: () -> Unit,
+) {
     Page {
         BrandMark()
         Spacer(Modifier.height(44.dp))
@@ -323,8 +446,59 @@ private fun HomeScreen(language: AppLanguage, onLock: () -> Unit) {
         Body(t(language, "CareLens locks automatically whenever it leaves the screen. Document import and offline reading are being prepared inside this encrypted vault.", "CareLens स्क्रीन से हटते ही अपने-आप लॉक हो जाता है। एन्क्रिप्टेड वॉल्ट में दस्तावेज़ आयात और ऑफ़लाइन पढ़ने की तैयारी हो रही है।"))
         Spacer(Modifier.height(28.dp))
         PrivacyCard(t(language, "Your vault key exists only in memory while this screen is open.", "इस स्क्रीन के खुले रहने तक ही आपकी वॉल्ट कुंजी मेमोरी में रहती है।"))
+        Spacer(Modifier.height(18.dp))
+        PrimaryButton(t(language, "Add photo or PDF", "फ़ोटो या PDF जोड़ें"), onClick = onChooseDocument)
+        Spacer(Modifier.height(12.dp))
+        OutlinedButton(onClick = onCaptureScan, modifier = Modifier.fillMaxWidth()) {
+            Text(t(language, "Scan with camera", "कैमरे से स्कैन करें"))
+        }
+        if (importing) {
+            Spacer(Modifier.height(12.dp))
+            Text(t(language, "Encrypting document…", "दस्तावेज़ एन्क्रिप्ट किया जा रहा है…"), color = CareLensMuted)
+        }
+        if (importFailed) {
+            ErrorText(t(language, "The document could not be imported. Please try another file.", "दस्तावेज़ आयात नहीं हो सका। कृपया दूसरी फ़ाइल आज़माएँ।"))
+        }
+        if (documents.isNotEmpty()) {
+            Spacer(Modifier.height(24.dp))
+            Text(t(language, "Encrypted documents", "एन्क्रिप्ट किए गए दस्तावेज़"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            documents.forEach { document ->
+                Spacer(Modifier.height(10.dp))
+                DocumentCard(document, language)
+            }
+        }
+        Spacer(Modifier.height(18.dp))
+        OutlinedButton(
+            onClick = {
+                onLanguageSelected(
+                    if (language == AppLanguage.ENGLISH) AppLanguage.HINDI else AppLanguage.ENGLISH,
+                )
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(t(language, "Use Hindi", "अंग्रेज़ी इस्तेमाल करें"))
+        }
         Spacer(Modifier.height(24.dp))
         PrimaryButton(t(language, "Lock now", "अभी लॉक करें"), onClick = onLock)
+    }
+}
+
+@Composable
+private fun DocumentCard(document: MedicalDocument, language: AppLanguage) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(document.displayName, fontWeight = FontWeight.SemiBold, color = CareLensInk)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                when (document.extractionStatus) {
+                    ExtractionStatus.PENDING -> t(language, "Stored securely · Reading comes next", "सुरक्षित रूप से संग्रहीत · पढ़ना अगला चरण है")
+                    ExtractionStatus.READY -> t(language, "Stored securely · Text ready", "सुरक्षित रूप से संग्रहीत · टेक्स्ट तैयार है")
+                    ExtractionStatus.FAILED -> t(language, "Stored securely · Text could not be read", "सुरक्षित रूप से संग्रहीत · टेक्स्ट पढ़ा नहीं जा सका")
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = CareLensMuted,
+            )
+        }
     }
 }
 

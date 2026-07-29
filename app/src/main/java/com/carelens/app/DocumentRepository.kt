@@ -47,11 +47,13 @@ internal class DocumentRepository(context: Context) {
         resolver: ContentResolver,
         uri: Uri,
         session: VaultSession,
+        displayName: String? = null,
+        mimeType: String? = null,
     ): MedicalDocument = synchronized(this) {
         val document = MedicalDocument(
             id = UUID.randomUUID().toString(),
-            displayName = resolver.fileName(uri) ?: "Medical document",
-            mimeType = resolver.getType(uri) ?: "application/octet-stream",
+            displayName = displayName ?: resolver.fileName(uri) ?: "Medical document",
+            mimeType = mimeType ?: resolver.getType(uri) ?: "application/octet-stream",
             addedAt = System.currentTimeMillis(),
         )
         writeEncryptedStream(resolver, uri, File(documentsDir, "${document.id}.bin"), session)

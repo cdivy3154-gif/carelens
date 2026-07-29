@@ -9,7 +9,7 @@ CareLens is a privacy-first, offline Android app for patients in India to organi
 - Document-backed insights with clear safety boundaries.
 - English and Hindi from first launch.
 
-## Current milestone: Secure vault (Phase 3)
+## Current milestone: Encrypted document import (Phase 6)
 
 The first Android prototype includes:
 
@@ -23,8 +23,12 @@ The first Android prototype includes:
 - Explicitly disabled Android cloud backup and device-to-device transfer.
 - No `INTERNET` permission and no cloud SDKs.
 - Screenshot and screen-recording protection while the app is visible.
+- Language preference persists on the device and is used from the locked screen onward.
+- Existing document-backed answers, safety notes, and recommendations support English and Hindi.
+- Photos and PDFs selected from the device are immediately encrypted into app-private storage.
+- Camera scans use a short-lived local staging file that is encrypted and then deleted.
 
-Encrypted document storage and bundled offline OCR foundations are present but are not exposed in the UI until Phases 6 and 7. Biometric unlock, medical analysis, and document import screens remain future milestones.
+Bundled offline OCR foundations are present but are not exposed until Phase 7. Biometric unlock and medical analysis screens remain future milestones.
 
 ## Build requirements
 
