@@ -297,7 +297,8 @@ private fun LanguageScreen(language: AppLanguage, onLanguageSelected: (AppLangua
         Spacer(Modifier.weight(1f))
         PrivacyCard(t(language, "Local-only. No Internet permission. No cloud account.", "केवल फ़ोन पर। इंटरनेट अनुमति नहीं। कोई क्लाउड खाता नहीं।"))
         Spacer(Modifier.height(18.dp))
-        PrimaryButton(t(language, "Continue", "आगे बढ़ें"), onContinue)
+        PrimaryButton(t(language, "Continue", "आगे बढ़ें"), onClick = onContinue)
+
     }
 }
 

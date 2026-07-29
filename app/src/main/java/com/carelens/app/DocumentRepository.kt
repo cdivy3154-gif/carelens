@@ -67,7 +67,8 @@ internal class DocumentRepository(context: Context) {
         pages: List<String>,
         session: VaultSession,
     ) = synchronized(this) {
-        writeEncrypted(File(textDir, "$documentId.bin"), pages.joinToString(PAGE_SEPARATOR), session)
+        writeEncrypted(File(textDir, "$documentId.bin"), pages.joinToString(PAGE_SEPARATOR).toByteArray(Charsets.UTF_8), session)
+
         val updated = load(session).map {
             if (it.id == documentId) it.copy(extractionStatus = ExtractionStatus.READY) else it
         }
