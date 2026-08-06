@@ -31,6 +31,7 @@ internal class DocumentRepository(context: Context) {
     private val root = File(context.filesDir, "carelens_vault")
     private val documentsDir = File(root, "documents")
     private val textDir = File(root, "text")
+    private val ocrDirectory = File(context.cacheDir, "ocr")
     private val catalogFile = File(root, "catalog.bin")
 
     init {
@@ -86,6 +87,23 @@ internal class DocumentRepository(context: Context) {
         val file = File(textDir, "$documentId.bin")
         if (!file.exists()) return emptyList()
         return readEncrypted(file, session).toString(Charsets.UTF_8).split(PAGE_SEPARATOR)
+    }
+
+    /**
+     * OCR libraries require a readable file descriptor. This creates a private, short-lived
+     * plaintext copy only while the recognizer is running; callers must delete it in `finally`.
+     */
+    fun decryptDocumentForOcr(document: MedicalDocument, session: VaultSession): File = synchronized(this) {
+        val directory = File(ocrDirectory, document.id).apply { mkdirs() }
+        val target = File(directory, "source")
+        FileOutputStream(target).use { output ->
+            output.write(readEncrypted(File(documentsDir, "${document.id}.bin"), session))
+        }
+        target
+    }
+
+    fun deleteOcrStaging(file: File) {
+        file.parentFile?.deleteRecursively()
     }
 
     fun delete(documentId: String, session: VaultSession) = synchronized(this) {

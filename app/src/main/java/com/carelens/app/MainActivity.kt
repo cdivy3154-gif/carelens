@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class AppLanguage { ENGLISH, HINDI }
-private enum class Screen { LANGUAGE, CREATE, PHRASE, LOCKED, RECOVER, ERASE, HOME }
+private enum class Screen { LANGUAGE, CREATE, PHRASE, LOCKED, RECOVER, ERASE, HOME, INSIGHTS }
 
 private data class PendingImport(
     val uri: Uri,
@@ -114,6 +114,7 @@ private fun CareLensApp(lockSignal: Int) {
     var pendingSecret by remember { mutableStateOf("") }
     var recoveryPhrase by remember { mutableStateOf("") }
     var documents by remember { mutableStateOf<List<MedicalDocument>>(emptyList()) }
+    var pagesByDocument by remember { mutableStateOf<Map<String, List<String>>>(emptyMap()) }
     var pendingImport by remember { mutableStateOf<PendingImport?>(null) }
     var pendingCameraFile by remember { mutableStateOf<File?>(null) }
     var importing by remember { mutableStateOf(false) }
@@ -165,28 +166,57 @@ private fun CareLensApp(lockSignal: Int) {
     LaunchedEffect(session, pendingImport) {
         val activeSession = session ?: run {
             documents = emptyList()
+            pagesByDocument = emptyMap()
             return@LaunchedEffect
         }
         val import = pendingImport
         if (import == null) {
-            documents = withContext(Dispatchers.IO) { documentRepository.load(activeSession) }
+            val loaded = withContext(Dispatchers.IO) { documentRepository.load(activeSession) }
+            documents = loaded
+            pagesByDocument = withContext(Dispatchers.IO) {
+                loaded.filter { it.extractionStatus == ExtractionStatus.READY }.associate { document ->
+                    document.id to documentRepository.readExtractedPages(document.id, activeSession)
+                }
+            }
             return@LaunchedEffect
         }
         importing = true
         importFailed = false
         val result = runCatching {
             withContext(Dispatchers.IO) {
-                documentRepository.importFromUri(
+                val document = documentRepository.importFromUri(
                     context.contentResolver,
                     import.uri,
                     activeSession,
                     import.displayName,
                     import.mimeType,
                 )
-                documentRepository.load(activeSession)
+                var staging: File? = null
+                try {
+                    staging = documentRepository.decryptDocumentForOcr(document, activeSession)
+                    val stagingUri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        staging,
+                    )
+                    val pages = LocalTextExtractor(context.contentResolver).extract(stagingUri, document.mimeType)
+                    documentRepository.saveExtractedText(document.id, pages, activeSession)
+                } catch (error: Exception) {
+                    if (error is java.util.concurrent.CancellationException) throw error
+                    documentRepository.markExtractionFailed(document.id, activeSession)
+                } finally {
+                    staging?.let(documentRepository::deleteOcrStaging)
+                }
+                val loaded = documentRepository.load(activeSession)
+                loaded to loaded.filter { it.extractionStatus == ExtractionStatus.READY }.associate { saved ->
+                    saved.id to documentRepository.readExtractedPages(saved.id, activeSession)
+                }
             }
         }
-        result.onSuccess { documents = it }.onFailure { importFailed = true }
+        result.onSuccess { (loaded, pages) ->
+            documents = loaded
+            pagesByDocument = pages
+        }.onFailure { importFailed = true }
         import.temporaryCameraFile?.delete()
         if (import.persistedReadGrant) {
             runCatching {
@@ -270,11 +300,18 @@ private fun CareLensApp(lockSignal: Int) {
                     importFailed = importFailed,
                     onChooseDocument = { documentPicker.launch(arrayOf("image/*", "application/pdf")) },
                     onCaptureScan = startCameraCapture,
+                    onOpenInsights = { screen = Screen.INSIGHTS },
                     onLock = {
                         session?.clear()
                         session = null
                         screen = Screen.LOCKED
                     },
+                )
+                Screen.INSIGHTS -> InsightsScreen(
+                    language = language,
+                    documents = documents,
+                    pagesByDocument = pagesByDocument,
+                    onBack = { screen = Screen.HOME },
                 )
             }
         }
@@ -438,13 +475,14 @@ private fun HomeScreen(
     importFailed: Boolean,
     onChooseDocument: () -> Unit,
     onCaptureScan: () -> Unit,
+    onOpenInsights: () -> Unit,
     onLock: () -> Unit,
 ) {
     Page {
         BrandMark()
         Spacer(Modifier.height(44.dp))
         Heading(t(language, "Your vault is unlocked", "आपका वॉल्ट अनलॉक है"))
-        Body(t(language, "CareLens locks automatically whenever it leaves the screen. Document import and offline reading are being prepared inside this encrypted vault.", "CareLens स्क्रीन से हटते ही अपने-आप लॉक हो जाता है। एन्क्रिप्टेड वॉल्ट में दस्तावेज़ आयात और ऑफ़लाइन पढ़ने की तैयारी हो रही है।"))
+        Body(t(language, "CareLens locks automatically whenever it leaves the screen. Documents are encrypted, read, and understood only on this phone.", "CareLens स्क्रीन से हटते ही अपने-आप लॉक हो जाता है। दस्तावेज़ केवल इसी फ़ोन पर एन्क्रिप्ट, पढ़े और समझे जाते हैं।"))
         Spacer(Modifier.height(28.dp))
         PrivacyCard(t(language, "Your vault key exists only in memory while this screen is open.", "इस स्क्रीन के खुले रहने तक ही आपकी वॉल्ट कुंजी मेमोरी में रहती है।"))
         Spacer(Modifier.height(18.dp))
@@ -455,7 +493,7 @@ private fun HomeScreen(
         }
         if (importing) {
             Spacer(Modifier.height(12.dp))
-            Text(t(language, "Encrypting document…", "दस्तावेज़ एन्क्रिप्ट किया जा रहा है…"), color = CareLensMuted)
+            Text(t(language, "Encrypting and reading document offline…", "दस्तावेज़ को एन्क्रिप्ट और ऑफ़लाइन पढ़ा जा रहा है…"), color = CareLensMuted)
         }
         if (importFailed) {
             ErrorText(t(language, "The document could not be imported. Please try another file.", "दस्तावेज़ आयात नहीं हो सका। कृपया दूसरी फ़ाइल आज़माएँ।"))
@@ -467,6 +505,10 @@ private fun HomeScreen(
                 Spacer(Modifier.height(10.dp))
                 DocumentCard(document, language)
             }
+        }
+        if (documents.any { it.extractionStatus == ExtractionStatus.READY }) {
+            Spacer(Modifier.height(18.dp))
+            PrimaryButton(t(language, "Ask your documents", "अपने दस्तावेज़ों से पूछें"), onClick = onOpenInsights)
         }
         Spacer(Modifier.height(18.dp))
         OutlinedButton(
@@ -492,13 +534,97 @@ private fun DocumentCard(document: MedicalDocument, language: AppLanguage) {
             Spacer(Modifier.height(4.dp))
             Text(
                 when (document.extractionStatus) {
-                    ExtractionStatus.PENDING -> t(language, "Stored securely · Reading comes next", "सुरक्षित रूप से संग्रहीत · पढ़ना अगला चरण है")
-                    ExtractionStatus.READY -> t(language, "Stored securely · Text ready", "सुरक्षित रूप से संग्रहीत · टेक्स्ट तैयार है")
+                    ExtractionStatus.PENDING -> t(language, "Stored securely · Waiting to be read", "सुरक्षित रूप से संग्रहीत · पढ़े जाने की प्रतीक्षा में")
+                    ExtractionStatus.READY -> t(language, "Stored securely · Offline text ready", "सुरक्षित रूप से संग्रहीत · ऑफ़लाइन टेक्स्ट तैयार है")
                     ExtractionStatus.FAILED -> t(language, "Stored securely · Text could not be read", "सुरक्षित रूप से संग्रहीत · टेक्स्ट पढ़ा नहीं जा सका")
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = CareLensMuted,
             )
+        }
+    }
+}
+
+@Composable
+private fun InsightsScreen(
+    language: AppLanguage,
+    documents: List<MedicalDocument>,
+    pagesByDocument: Map<String, List<String>>,
+    onBack: () -> Unit,
+) {
+    var question by remember { mutableStateOf("") }
+    var answer by remember { mutableStateOf<GroundedAnswer?>(null) }
+    val readableDocuments = documents.filter { it.extractionStatus == ExtractionStatus.READY }
+    val recommendations = remember(documents, pagesByDocument, language) {
+        DocumentGroundedAssistant.recommendations(
+            documents = readableDocuments,
+            pagesByDocument = pagesByDocument,
+            hindi = language == AppLanguage.HINDI,
+        )
+    }
+
+    Page {
+        BackButton(language, onBack)
+        Spacer(Modifier.height(28.dp))
+        Heading(t(language, "Ask your documents", "अपने दस्तावेज़ों से पूछें"))
+        Body(t(language, "CareLens searches only the offline text in this vault and always shows where an answer came from.", "CareLens केवल इस वॉल्ट के ऑफ़लाइन टेक्स्ट में खोजता है और हर उत्तर का स्रोत दिखाता है।"))
+        Spacer(Modifier.height(18.dp))
+        PrivacyCard(t(language, "Not medical advice. Do not use this for diagnosis, treatment, or medication dosing.", "यह चिकित्सीय सलाह नहीं है। इसका उपयोग निदान, उपचार या दवा की खुराक के लिए न करें।"))
+        Spacer(Modifier.height(22.dp))
+        OutlinedTextField(
+            value = question,
+            onValueChange = { question = it; answer = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text(t(language, "Question about your documents", "अपने दस्तावेज़ों के बारे में प्रश्न")) },
+            placeholder = { Text(t(language, "For example: What follow-up is mentioned?", "उदाहरण: किस फ़ॉलो-अप का उल्लेख है?")) },
+            minLines = 3,
+            shape = RoundedCornerShape(14.dp),
+        )
+        Spacer(Modifier.height(12.dp))
+        PrimaryButton(
+            label = t(language, "Find in my documents", "मेरे दस्तावेज़ों में खोजें"),
+            enabled = question.trim().isNotEmpty(),
+        ) {
+            answer = DocumentGroundedAssistant.answer(
+                question = question,
+                documents = readableDocuments,
+                pagesByDocument = pagesByDocument,
+                hindi = language == AppLanguage.HINDI,
+            )
+        }
+        answer?.let { result ->
+            Spacer(Modifier.height(20.dp))
+            InsightCard(result, language)
+        }
+        if (recommendations.isNotEmpty()) {
+            Spacer(Modifier.height(24.dp))
+            Text(t(language, "Follow-up mentioned in your documents", "आपके दस्तावेज़ों में उल्लिखित फ़ॉलो-अप"), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            recommendations.forEach { result ->
+                Spacer(Modifier.height(10.dp))
+                InsightCard(result, language)
+            }
+        }
+    }
+}
+
+@Composable
+private fun InsightCard(result: GroundedAnswer, language: AppLanguage) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(result.answer, color = CareLensInk)
+            if (result.citations.isNotEmpty()) {
+                Spacer(Modifier.height(12.dp))
+                Text(t(language, "Sources", "स्रोत"), fontWeight = FontWeight.SemiBold, color = CareLensInk)
+                result.citations.forEach { citation ->
+                    Text(
+                        t(language, "${citation.documentName} · page ${citation.page}", "${citation.documentName} · पृष्ठ ${citation.page}"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CareLensMuted,
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(result.safetyNote, style = MaterialTheme.typography.bodySmall, color = CareLensMuted)
         }
     }
 }

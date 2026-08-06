@@ -2,4 +2,6 @@
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Camera output is a short-lived local staging file, encrypted then deleted on import. -->
     <cache-path name="camera_scans" path="camera/" />
+    <!-- A decrypted input exists here only while offline OCR is processing it. -->
+    <cache-path name="ocr_staging" path="ocr/" />
 </paths>
