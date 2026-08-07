@@ -29,6 +29,7 @@ The first Android prototype includes:
 - Camera scans use a short-lived local staging file that is encrypted and then deleted.
 - Imported photos and PDFs are read using bundled English and Devanagari OCR with no network access.
 - OCR text is encrypted in the vault; a decrypted input is created in private cache only while OCR runs, then removed.
+- A private, document-backed timeline copies detected dates, lab results, medicines, diagnoses, and prescription instructions with their document/page source.
 - Patients can ask questions about the readable documents in their vault and see document-and-page citations.
 - Follow-up language is surfaced from the uploaded records with a clear non-diagnostic safety boundary.
 

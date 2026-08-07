@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
 }
 
 private enum class AppLanguage { ENGLISH, HINDI }
-private enum class Screen { LANGUAGE, CREATE, PHRASE, LOCKED, RECOVER, ERASE, HOME, INSIGHTS }
+private enum class Screen { LANGUAGE, CREATE, PHRASE, LOCKED, RECOVER, ERASE, HOME, TIMELINE, INSIGHTS }
 
 private data class PendingImport(
     val uri: Uri,
@@ -300,12 +300,19 @@ private fun CareLensApp(lockSignal: Int) {
                     importFailed = importFailed,
                     onChooseDocument = { documentPicker.launch(arrayOf("image/*", "application/pdf")) },
                     onCaptureScan = startCameraCapture,
+                    onOpenTimeline = { screen = Screen.TIMELINE },
                     onOpenInsights = { screen = Screen.INSIGHTS },
                     onLock = {
                         session?.clear()
                         session = null
                         screen = Screen.LOCKED
                     },
+                )
+                Screen.TIMELINE -> RecordTimelineScreen(
+                    language = language,
+                    documents = documents,
+                    pagesByDocument = pagesByDocument,
+                    onBack = { screen = Screen.HOME },
                 )
                 Screen.INSIGHTS -> InsightsScreen(
                     language = language,
@@ -475,6 +482,7 @@ private fun HomeScreen(
     importFailed: Boolean,
     onChooseDocument: () -> Unit,
     onCaptureScan: () -> Unit,
+    onOpenTimeline: () -> Unit,
     onOpenInsights: () -> Unit,
     onLock: () -> Unit,
 ) {
@@ -508,6 +516,10 @@ private fun HomeScreen(
         }
         if (documents.any { it.extractionStatus == ExtractionStatus.READY }) {
             Spacer(Modifier.height(18.dp))
+            OutlinedButton(onClick = onOpenTimeline, modifier = Modifier.fillMaxWidth()) {
+                Text(t(language, "View record timeline", "रिकॉर्ड टाइमलाइन देखें"))
+            }
+            Spacer(Modifier.height(12.dp))
             PrimaryButton(t(language, "Ask your documents", "अपने दस्तावेज़ों से पूछें"), onClick = onOpenInsights)
         }
         Spacer(Modifier.height(18.dp))
@@ -543,6 +555,72 @@ private fun DocumentCard(document: MedicalDocument, language: AppLanguage) {
             )
         }
     }
+}
+
+@Composable
+private fun RecordTimelineScreen(
+    language: AppLanguage,
+    documents: List<MedicalDocument>,
+    pagesByDocument: Map<String, List<String>>,
+    onBack: () -> Unit,
+) {
+    val readableDocuments = documents.filter { it.extractionStatus == ExtractionStatus.READY }
+    val items = remember(readableDocuments, pagesByDocument) {
+        MedicalRecordOrganizer.organize(readableDocuments, pagesByDocument)
+    }
+    Page {
+        BackButton(language, onBack)
+        Spacer(Modifier.height(28.dp))
+        Heading(t(language, "Your record timeline", "आपकी रिकॉर्ड टाइमलाइन"))
+        Body(t(language, "Dates, lab results, medicines, diagnoses, and prescription instructions copied exactly from your readable documents.", "पढ़े जा सकने वाले दस्तावेज़ों से तारीखें, लैब परिणाम, दवाएँ, निदान और पर्चे के निर्देश ज्यों के त्यों लिए गए हैं।"))
+        Spacer(Modifier.height(18.dp))
+        PrivacyCard(t(language, "Check the original document before acting on any result or medicine instruction. CareLens does not interpret or change what your record says.", "किसी परिणाम या दवा के निर्देश पर कार्य करने से पहले मूल दस्तावेज़ देखें। CareLens आपके रिकॉर्ड की व्याख्या या उसमें बदलाव नहीं करता।"))
+        if (items.isEmpty()) {
+            Spacer(Modifier.height(22.dp))
+            Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+                Text(
+                    t(language, "No dates, lab results, medicines, diagnoses, or prescription instructions could be confidently copied from the readable documents yet.", "पढ़े जा सकने वाले दस्तावेज़ों से अभी कोई तारीख, लैब परिणाम, दवा, निदान या पर्चे का निर्देश भरोसे के साथ नहीं लिया जा सका।"),
+                    Modifier.padding(16.dp),
+                    color = CareLensMuted,
+                )
+            }
+        } else {
+            Spacer(Modifier.height(22.dp))
+            items.forEach { item ->
+                TimelineItemCard(item, language)
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun TimelineItemCard(item: MedicalRecordItem, language: AppLanguage) {
+    Card(colors = CardDefaults.cardColors(containerColor = Color.White), shape = RoundedCornerShape(16.dp)) {
+        Column(Modifier.padding(16.dp)) {
+            Text(recordTypeLabel(item.type, language), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = CareLensTeal)
+            Spacer(Modifier.height(6.dp))
+            Text(item.text, color = CareLensInk)
+            item.observedDate?.let { date ->
+                Spacer(Modifier.height(8.dp))
+                Text(t(language, "Date shown on this page: $date", "इस पृष्ठ पर दिखाई गई तारीख: $date"), style = MaterialTheme.typography.bodySmall, color = CareLensMuted)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                t(language, "${item.citation.documentName} · page ${item.citation.page}", "${item.citation.documentName} · पृष्ठ ${item.citation.page}"),
+                style = MaterialTheme.typography.bodySmall,
+                color = CareLensMuted,
+            )
+        }
+    }
+}
+
+private fun recordTypeLabel(type: MedicalRecordType, language: AppLanguage): String = when (type) {
+    MedicalRecordType.DATE -> t(language, "Date", "तारीख")
+    MedicalRecordType.LAB_VALUE -> t(language, "Lab result", "लैब परिणाम")
+    MedicalRecordType.MEDICINE -> t(language, "Medicine listed", "सूचीबद्ध दवा")
+    MedicalRecordType.DIAGNOSIS -> t(language, "Diagnosis written in record", "रिकॉर्ड में लिखा निदान")
+    MedicalRecordType.PRESCRIPTION -> t(language, "Prescription instruction", "पर्चे का निर्देश")
 }
 
 @Composable
